@@ -27,18 +27,21 @@ fn is_vec(ty: &Type) -> Option<&Type> {
     is_wrapper(ty, "Vec")
 }
 
-fn has_each_attribute(field: &Field) -> Option<(String, &Type)> {
+fn has_each_attribute(field: &Field) -> Result<Option<(String, &Type)>> {
     for attr in &field.attrs {
         if let Meta::List(meta) = attr.parse_meta().unwrap() {
             if let Some(segment) = meta.path.segments.first() {
                 if segment.ident == "builder" {
                     if let NestedMeta::Meta(Meta::NameValue(nested)) = meta.nested.first().unwrap() {
                         if &nested.path.segments.first().unwrap().ident.to_string() != "each" {
-                            panic!("expected `builder(each = \"...\")`");
+                            return Err(Error::new_spanned(
+                                meta,
+                                "expected `builder(each = \"...\")`"
+                            ));
                         }
                         if let Some(inner_type) = is_vec(&field.ty) {
                             if let Lit::Str(each_setter_name) = &nested.lit {
-                                return Some((each_setter_name.value(), inner_type));
+                                return Ok(Some((each_setter_name.value(), inner_type)));
                             } else {
                                 panic!("String literal expected for 'each setter' name");
                             }
@@ -52,7 +55,7 @@ fn has_each_attribute(field: &Field) -> Option<(String, &Type)> {
             }
         }
     }
-    None
+    Ok(None)
 }
 
 #[proc_macro_derive(Builder, attributes(builder))]
@@ -84,7 +87,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
-                #field_name: Option<#field_type>,
+                #field_name: std::option::Option<#field_type>,
             }
         }
     });
@@ -102,29 +105,33 @@ pub fn derive(input: TokenStream) -> TokenStream {
         } else {
             let mut include_full_setter = true;
 
-            let each_setter = if let Some((setter_name, item_type)) = has_each_attribute(&field) {
-                let setter_name = format_ident!("{}", setter_name);
-                // TODO: Look at the following line deeper to understand it better.
-                if *field_name.to_string() == *setter_name.to_string() {
-                    include_full_setter = false;
-                }
-                quote! {
-                    fn #setter_name(&mut self, value: #item_type) -> &mut Self {
-                        if self.#field_name.is_none() {
-                            self.#field_name = Some(Vec::new());
-                        }
-                        self.#field_name.as_mut().unwrap().push(value);
-                        self
+            let each_setter = match has_each_attribute(&field) {
+                Ok(Some((setter_name, item_type))) => {
+                    let setter_name = format_ident!("{}", setter_name);
+                    // TODO: Look at the following line deeper to understand it better.
+                    if *field_name.to_string() == *setter_name.to_string() {
+                        include_full_setter = false;
                     }
-                }
-            } else {
-                quote! {}
+                    quote! {
+                        fn #setter_name(&mut self, value: #item_type) -> &mut Self {
+                            if self.#field_name.is_none() {
+                                self.#field_name = std::option::Option::Some(Vec::new());
+                            }
+                            self.#field_name.as_mut().unwrap().push(value);
+                            self
+                        }
+                    }
+                },
+
+                Ok(_) => quote!{},
+
+                Err(error) => error.to_compile_error(),
             };
 
             let full_setter = if include_full_setter {
                 quote! {
                     fn #field_name(&mut self, value: #field_type) -> &mut Self {
-                        self.#field_name = Some(value);
+                        self.#field_name = std::option::Option::Some(value);
                         self
                     }
                 }
@@ -157,13 +164,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let value_initializers = fields.iter().map(|field| {
         let field_name = field.ident.as_ref().unwrap();
-        if let Some((_, _)) = has_each_attribute(&field) {
+        if let Ok(Some((_, _))) = has_each_attribute(&field) {
             quote! {
-                #field_name: Some(Vec::new()),
+                #field_name: std::option::Option::Some(std::vec::Vec::new()),
             }
         } else {
             quote! {
-                #field_name: None,
+                #field_name: std::option::Option::None,
             }
         }
     });
@@ -176,7 +183,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         impl #builder_name {
             #( #setters )*
 
-            fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
+            fn build(&mut self) -> std::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
                 Ok(#name {
                     #( #builders )*
                 })

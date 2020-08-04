@@ -14,7 +14,7 @@ path = "tests/progress.rs"
 
 [[test]]
 name = "step"
-path = "tests/08-unrecognized-attribute.rs"
+path = "tests/09-redefined-prelude-types.rs"
 
 [dev-dependencies]
 trybuild = { version = "1.0", features = ["diff"] }
